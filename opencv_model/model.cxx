@@ -1,6 +1,11 @@
 #include <cv.h>
 #include <highgui.h>
 #include "math.h"
+#include <numeric>
+
+#include "linreg.h"
+
+#define THRESH 200.0
 
 using namespace cv;
 const int MAX_CORNERS = 100;
@@ -107,6 +112,7 @@ void getBinary(Mat& src, Scalar& low_HSV, Scalar& hi_HSV, Mat& dest) {
     
     removeSmall(bw, dest, 10);
 }
+
             
 int main ( int argc, char **argv )
 {
@@ -124,16 +130,23 @@ int main ( int argc, char **argv )
 	cvNamedWindow( "ImageA", 0 );
 	cvNamedWindow( "ImageB", 0 );
 	cvNamedWindow( "LKpyr_OpticalFlow", 0 );
-
+	namedWindow("Line Finder", 1);
+	
 	int flipMode = -1;
 	Mat imgA, imgGrayA, imgB, imgGrayB, imgC;
 	pullFrame(cap, imgA, imgGrayA, NULL); //flipHorizAndVert);
 	imgC = imgA;
+
 	while(true) {
         Mat maskA, discard;
+
+	vector<int> cmxs;
+	vector<int> yvals;
+	LinearRegression linreg;
+
         getBinary(imgA, LOW_HSV, HIGH_HSV, maskA);
         
-        Mat thold, edge, edgeMask;
+        Mat thold, edge, edgeMask, display;
         //binary threshold for the really bright stuff
         
         cannyThreshold(imgA, imgGrayA, edge, edgeMask);
@@ -141,17 +154,57 @@ int main ( int argc, char **argv )
         // printf("%d, %d, %d", thold.size().width, thold.size().height, thold.channels());
         // printf("%d, %d, %d", maskA.size().width, maskA.size().height, maskA.channels());
         removeSmall(thold, thold, 100);
-        maskA = maskA + edgeMask + thold;
-        
+        //maskA = maskA + edgeMask + thold;
+	maskA = maskA + thold;
+
 		pullFrame(cap, imgB, imgGrayB, NULL); //flipHorizAndVert);
 
-		cvShowImageMat( "ImageA", thold );
-        cvShowImageMat( "ImageB", maskA );
-		cvShowImageMat( "LKpyr_OpticalFlow", imgGrayA );
-		imgA = imgB;
-        imgGrayA = imgGrayB;
-		imgC = imgB;
+		//cvShowImageMat( "ImageA", thold );
+		//cvShowImageMat( "ImageB", maskA );
+	//cvShowImageMat( "LKpyr_OpticalFlow", imgGrayA );
+	//	imgA = imgB;
+        //imgGrayA = imgGrayB;
+	//	imgC = imgB;
         // usleep(30 * 1000);
+
+	cvtColor(maskA, display, COLOR_GRAY2BGR);
+
+	for(int row = 100; row < (maskA.rows-10); row += 10) {
+	  Mat slice = maskA(Range(row, row+10), Range(0, maskA.cols));
+
+	  Moments slicemoments = moments(slice, true);
+	  
+	  if(slicemoments.m00 > THRESH) {
+	    int cmx = slicemoments.m10/slicemoments.m00;
+	    cmxs.push_back(cmx);
+	    yvals.push_back(row);
+	    linreg.addXY(cmx, row);
+	  }
+	}
+
+	/*double sum = std::accumulate(cmxs.begin(), cmxs.end(), 0.0);
+	double mean = sum / cmxs.size();
+
+	double sq_sum = std::inner_product(cmxs.begin(), cmxs.end(), cmxs.begin(), 0.0);
+	double stdev = std::sqrt(sq_sum/cmxs.size() - mean * mean);*/
+
+	LinearRegression linreg2;
+
+        for(int i = 0; i < cmxs.size(); ++i) {
+	  double zscore = (yvals[i] - linreg.estimateY(cmxs[i]))/linreg.getStdErrorEst();
+	  cout << "Z Score: " << zscore << endl;
+	  if(std::abs(zscore) < 1.0) {
+	    std::cout << "Center of Mass (x): " << cmxs[i] << std::endl;
+	    linreg2.addXY(cmxs[i], yvals[i]);
+	    circle(display, Point(cmxs[i], yvals[i]+5), 4, Scalar(255, 0, 0), 5, 8, 0);
+	  }
+	}
+
+	line(display, Point(0, linreg2.estimateY(0)), Point(display.cols, linreg2.estimateY(display.cols)), Scalar(0, 0, 255), 2, CV_AA);
+
+	imshow("Line Finder", display);
+
+	if(waitKey(30) >= 0) break;
 	}
 }
 
